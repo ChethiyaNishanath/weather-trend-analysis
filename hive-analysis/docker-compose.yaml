@@ -1,0 +1,79 @@
+version: "3.8"
+
+services:
+  metastore-db:
+    image: postgres:14
+    container_name: metastore-db
+    environment:
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: hive
+      POSTGRES_DB: hive
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - metastore_db:/var/lib/postgresql/data
+    networks:
+      - hadoop
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hive"]
+      interval: 10s
+      retries: 15
+      timeout: 5s
+  
+  hive-metastore-init:
+    image: bde2020/hive:2.3.2-postgresql-metastore
+    container_name: hive-metastore-init
+    depends_on:
+      - metastore-db
+    env_file:
+      - ./hadoop.env
+    command: schematool -dbType postgres -initSchema
+    networks:
+      - hadoop
+
+  hive-metastore:
+    image: bde2020/hive:2.3.2-postgresql-metastore
+    container_name: hive-metastore
+    depends_on:
+      hive-metastore-init:
+        condition: service_completed_successfully
+      metastore-db:
+        condition: service_healthy
+    env_file:
+      - ./hadoop.env
+    environment:
+      - SERVICE_PRECONDITION=namenode:9000
+      - HIVE_METASTORE_DB_HOST=metastore-db
+      - HIVE_METASTORE_DB_NAME=metastore
+      - HIVE_METASTORE_DB_USER=hive
+      - HIVE_METASTORE_DB_PASS=hive
+      - HIVE_EXECUTION_ENGINE=mr
+    command: /opt/hive/bin/hive --service metastore
+    ports:
+      - "9083:9083"
+    networks:
+      - hadoop
+
+  hive-server:
+    image: bde2020/hive:2.3.2-postgresql-metastore
+    container_name: hive-server
+    depends_on:
+      hive-metastore:
+        condition: service_started
+    env_file:
+      - ./hadoop.env
+    environment:
+      - SERVICE_PRECONDITION=hive-metastore:9083
+      - HIVE_METASTORE_URIS=thrift://hive-metastore:9083
+      - HIVE_EXECUTION_ENGINE=mr
+    command: /opt/hive/bin/hiveserver2
+    ports:
+      - "10000:10000"
+    networks:
+      - hadoop
+
+volumes:
+  metastore_db:
+
+networks:
+  hadoop:
+    external: true
